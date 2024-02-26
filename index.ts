@@ -24,31 +24,36 @@ const io = new Server<ClientToServerEvents, ServerToClientEvents>(
 );
 
 const meetings: KeyValue<{
-  ownerId: string;
   ownerSocketId: string;
   members: number;
+  requestsCount: number;
 }> = {};
 
 io.on("connection", (socket) => {
   socket.on("user:join-request", ({ code, user, ownerId }) => {
-    if (meetings[code]?.members >= 9) {
+    if (
+      meetings[code]?.members >= 9 ||
+      meetings[code]?.members + meetings[code]?.requestsCount >= 9 ||
+      meetings[code]?.requestsCount >= 9
+    ) {
       return socket.emit("meeting:full");
     }
     if (user.id === ownerId) {
       if (!meetings[code]?.members) {
         meetings[code] = {
           ownerSocketId: socket.id,
-          ownerId: ownerId,
           members: 1,
+          requestsCount: 0,
         };
       } else {
         meetings[code].members = meetings[code].members + 1;
       }
       return socket.emit("user:accepted", { code, user });
     }
-    if (!meetings[code]?.ownerId || !meetings[code]?.ownerSocketId) {
+    if (!meetings[code]?.ownerSocketId) {
       return socket.emit("user:wait-for-owner");
     }
+    meetings[code].requestsCount = meetings[code].requestsCount + 1;
     io.to(meetings[code].ownerSocketId).emit("user:join-request", {
       ...user,
       socketId: socket.id,
@@ -57,9 +62,11 @@ io.on("connection", (socket) => {
 
   socket.on("user:accepted", ({ code, user }) => {
     meetings[code].members = meetings[code].members + 1;
+    meetings[code].requestsCount = meetings[code].requestsCount - 1;
     io.to(user.socketId).emit("user:accepted", { code, user });
   });
   socket.on("user:rejected", ({ code, user }) => {
+    meetings[code].requestsCount = meetings[code].requestsCount - 1;
     io.to(user.socketId).emit("user:rejected", { code, user });
   });
   socket.on("meeting:join", ({ code, user }) => {
@@ -74,7 +81,6 @@ io.on("connection", (socket) => {
     });
     socket.on("disconnect", (data) => {
       if (meetings[code]?.ownerSocketId === socket.id) {
-        meetings[code].ownerId = "";
         meetings[code].ownerSocketId = "";
       }
       if (meetings[code]?.members <= 1) {
